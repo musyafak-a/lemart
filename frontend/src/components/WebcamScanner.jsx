@@ -9,7 +9,6 @@ const SCANNER_ELEMENT_ID = "webcam-scanner-viewport";
 
 /**
  * Plays a short synthesized "beep" using the Web Audio API.
- * No external audio asset required.
  */
 function playBeep() {
   try {
@@ -30,27 +29,10 @@ function playBeep() {
     oscillator.stop(ctx.currentTime + 0.15);
     oscillator.onended = () => ctx.close();
   } catch (err) {
-    // Web Audio not available — fail silently, scan still works.
     console.warn("Beep playback failed:", err);
   }
 }
 
-/**
- * WebcamScanner
- *
- * Real-time barcode/QR scanner using the device webcam.
- * Handles the full frontend algorithm from the spec:
- *  1. Requests getUserMedia via html5-qrcode
- *  2. Continuously decodes frames
- *  3. Debounces duplicate scans (1.5–2s cooldown) + beep feedback
- *  4. POSTs the decoded barcode to /api/scan with JWT auth
- *
- * Props:
- *  - mode: "kasir" | "restock"  → determines API behavior downstream
- *  - onProductDetected(product) → called with the product payload on success
- *  - onNotFound(barcode)        → called when the backend returns 404
- *  - apiBaseUrl                 → override for the API host (default: env var)
- */
 export default function WebcamScanner({
   mode = "kasir",
   onProductDetected,
@@ -58,14 +40,13 @@ export default function WebcamScanner({
   apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000",
 }) {
   const scannerRef = useRef(null);
-  const isScanningRef = useRef(false); // guards against multiple simultaneous triggers
+  const isScanningRef = useRef(false);
   const cooldownTimerRef = useRef(null);
 
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastScanned, setLastScanned] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
-  const [cameras, setCameras] = useState([]);
 
   const addItemToCart = useCartStore((state) => state.addItem);
 
@@ -99,7 +80,7 @@ export default function WebcamScanner({
         setLastScanned(product);
       } catch (err) {
         if (err.response?.status === 404) {
-          setErrorMessage("Barang tidak terdaftar!");
+          setErrorMessage(`Barang dengan barcode (${decodedText}) tidak terdaftar!`);
           onNotFound?.(decodedText);
         } else if (err.response?.status === 409) {
           setErrorMessage(err.response.data?.message || "Stok tidak mencukupi.");
@@ -114,10 +95,9 @@ export default function WebcamScanner({
     [apiBaseUrl, mode, addItemToCart, onProductDetected, onNotFound]
   );
 
-  /** Core detection callback wired into html5-qrcode. */
   const onScanSuccess = useCallback(
     (decodedText) => {
-      if (isScanningRef.current) return; // block duplicate trigger during cooldown
+      if (isScanningRef.current) return;
 
       isScanningRef.current = true;
       playBeep();
@@ -134,7 +114,6 @@ export default function WebcamScanner({
     setErrorMessage(null);
     try {
       const devices = await Html5Qrcode.getCameras();
-      setCameras(devices);
 
       if (!devices || devices.length === 0) {
         setErrorMessage("Kamera tidak ditemukan.");
@@ -163,9 +142,7 @@ export default function WebcamScanner({
           aspectRatio: 1.7777778,
         },
         onScanSuccess,
-        () => {
-          // per-frame decode failure — expected constantly, ignore silently
-        }
+        () => {}
       );
 
       setIsCameraActive(true);
@@ -189,13 +166,15 @@ export default function WebcamScanner({
     }
   }, []);
 
+  // Otomatis mulai scan saat komponen dimuat
   useEffect(() => {
+    startScanner();
+
     return () => {
       clearTimeout(cooldownTimerRef.current);
       stopScanner();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [startScanner, stopScanner]);
 
   return (
     <div className="flex flex-col gap-3 rounded-xl bg-canvas p-4 shadow-card border border-brand-100">
@@ -215,24 +194,24 @@ export default function WebcamScanner({
         >
           {isCameraActive ? (
             <>
-              <CameraOff className="h-3.5 w-3.5" /> Stop
+              <CameraOff className="h-3.5 w-3.5" /> Matikan Kamera
             </>
           ) : (
             <>
-              <Camera className="h-3.5 w-3.5" /> Mulai Scan
+              <Camera className="h-3.5 w-3.5" /> Nyalakan Kamera
             </>
           )}
         </button>
       </div>
 
-      {/* Webcam viewport with scanner bounding-box overlay */}
+      {/* Viewport kamera */}
       <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-ink">
         <div id={SCANNER_ELEMENT_ID} className="h-full w-full [&_video]:h-full [&_video]:w-full [&_video]:object-cover" />
 
         {!isCameraActive && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/60">
             <Camera className="h-8 w-8" />
-            <p className="text-xs">Kamera belum aktif</p>
+            <p className="text-xs">Kamera belum aktif. Klik tombol di kanan atas.</p>
           </div>
         )}
 
@@ -244,7 +223,7 @@ export default function WebcamScanner({
 
         {isProcessing && (
           <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white">
-            <Loader2 className="h-3 w-3 animate-spin" /> Memproses...
+            <Loader2 className="h-3 w-3 animate-spin" /> Memeriksa ke MySQL...
           </div>
         )}
       </div>
@@ -258,8 +237,9 @@ export default function WebcamScanner({
       )}
 
       {lastScanned && !errorMessage && (
-        <div className="rounded-lg bg-brand-50 px-3 py-2 text-xs text-brand-800">
-          Terdeteksi: <span className="font-semibold">{lastScanned.name}</span>
+        <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-800 flex items-center justify-between">
+          <span>Terdeteksi di MySQL: <strong className="font-semibold">{lastScanned.name}</strong></span>
+          <span className="font-bold text-emerald-600">Rp {Number(lastScanned.price).toLocaleString('id-ID')}</span>
         </div>
       )}
     </div>
