@@ -3,25 +3,21 @@ import { create } from "zustand";
 /**
  * useCartStore
  *
- * Zustand store for the Mode Kasir shopping cart.
- * A scanned product is added (or its qty incremented if already present).
- * Stock ceiling is enforced client-side using the product's `stock` field
- * returned by /api/scan, as a first line of defense before the backend
- * re-validates at checkout.
+ * Zustand store for the Mode Kasir shopping cart (Master Spec Compliant).
+ * Tracks items with { id, barcode, brand, variant_name, price, stock, qty }.
  */
 export const useCartStore = create((set, get) => ({
-  items: [], // [{ id, barcode, name, price, stock, qty }]
-  paymentMethod: "cash",
+  items: [],
+  paymentMethod: "CASH",
 
-  /** Adds a scanned product to the cart, or bumps qty if it's already there. */
+  /** Adds a scanned product to the cart, or bumps qty if already present. */
   addItem: (product) =>
     set((state) => {
       const existing = state.items.find((item) => item.id === product.id);
 
       if (existing) {
-        // Respect available stock — never let qty exceed what's on hand.
         if (existing.qty >= product.stock) {
-          return state; // no-op: stock ceiling reached
+          return state; // stock ceiling reached
         }
         return {
           items: state.items.map((item) =>
@@ -31,7 +27,7 @@ export const useCartStore = create((set, get) => ({
       }
 
       if (product.stock <= 0) {
-        return state; // out of stock, refuse to add
+        return state; // out of stock
       }
 
       return {
@@ -39,7 +35,6 @@ export const useCartStore = create((set, get) => ({
       };
     }),
 
-  /** Manually sets an item's quantity (e.g. from a quantity input). */
   updateQty: (productId, qty) =>
     set((state) => ({
       items: state.items
@@ -58,12 +53,9 @@ export const useCartStore = create((set, get) => ({
 
   setPaymentMethod: (method) => set({ paymentMethod: method }),
 
-  clearCart: () => set({ items: [], paymentMethod: "cash" }),
+  clearCart: () => set({ items: [], paymentMethod: "CASH" }),
 
-  /** Derived total — call as useCartStore(state => state.getTotal()) is NOT
-   *  reactive by itself; prefer selecting `items` and computing in the
-   *  component, or use this helper outside of render for one-off reads. */
-  getTotal: () => get().items.reduce((sum, item) => sum + item.price * item.qty, 0),
+  getTotal: () => get().items.reduce((sum, item) => sum + Number(item.price) * item.qty, 0),
 
   getItemCount: () => get().items.reduce((sum, item) => sum + item.qty, 0),
 }));

@@ -1,52 +1,49 @@
 -- Roles
 CREATE TABLE roles (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(50) UNIQUE NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    role_name VARCHAR(50) UNIQUE NOT NULL
 );
 
 -- Users
 CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    role_id INT,
+    role_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
     username VARCHAR(50) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    full_name VARCHAR(100),
+    password VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE RESTRICT
 );
 
 -- Categories
 CREATE TABLE categories (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) UNIQUE NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    category_name VARCHAR(100) UNIQUE NOT NULL
 );
 
 -- Products
 CREATE TABLE products (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    category_id INT,
     barcode VARCHAR(100) UNIQUE NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    price DECIMAL(12, 2) NOT NULL CHECK (price >= 0),
+    category_id INT,
+    brand VARCHAR(100) NOT NULL,
+    variant_name VARCHAR(150) NOT NULL,
+    price DECIMAL(10, 2) NOT NULL CHECK (price >= 0),
     stock INT NOT NULL DEFAULT 0 CHECK (stock >= 0),
     min_stock INT NOT NULL DEFAULT 5,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
-    INDEX idx_products_barcode (barcode),
-    INDEX idx_products_stock_min_stock (stock, min_stock)
+    INDEX idx_products_barcode (barcode)
 );
 
 -- Transactions
 CREATE TABLE transactions (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    transaction_code VARCHAR(100) UNIQUE NOT NULL,
     user_id INT,
-    total_amount DECIMAL(15, 2) NOT NULL CHECK (total_amount >= 0),
+    total_price DECIMAL(10, 2) NOT NULL CHECK (total_price >= 0),
     payment_method VARCHAR(50) DEFAULT 'CASH',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
@@ -55,11 +52,10 @@ CREATE TABLE transactions (
 -- Transaction Details
 CREATE TABLE transaction_details (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    transaction_id INT,
-    product_id INT,
-    quantity INT NOT NULL CHECK (quantity > 0),
-    price_at_transaction DECIMAL(12, 2) NOT NULL CHECK (price_at_transaction >= 0),
-    subtotal DECIMAL(15, 2) NOT NULL CHECK (subtotal >= 0),
+    transaction_id INT NOT NULL,
+    product_id INT NOT NULL,
+    qty INT NOT NULL CHECK (qty > 0),
+    subtotal DECIMAL(10, 2) NOT NULL CHECK (subtotal >= 0),
     FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT
 );
@@ -67,10 +63,10 @@ CREATE TABLE transaction_details (
 -- Inventory Logs
 CREATE TABLE inventory_logs (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    product_id INT,
+    product_id INT NOT NULL,
     user_id INT,
     type ENUM('IN', 'OUT', 'ADJUSTMENT') NOT NULL,
-    quantity_changed INT NOT NULL,
+    qty INT NOT NULL,
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,

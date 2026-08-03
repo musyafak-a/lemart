@@ -7,9 +7,6 @@ import { useCartStore } from "../store/useCartStore";
 const SCAN_COOLDOWN_MS = 1800; // 1.5 - 2s debounce window
 const SCANNER_ELEMENT_ID = "webcam-scanner-viewport";
 
-/**
- * Plays a short synthesized "beep" using the Web Audio API.
- */
 function playBeep() {
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -50,7 +47,6 @@ export default function WebcamScanner({
 
   const addItemToCart = useCartStore((state) => state.addItem);
 
-  /** Sends the decoded barcode to the backend and routes the result. */
   const handleDetectedBarcode = useCallback(
     async (decodedText) => {
       const token = localStorage.getItem("auth_token");
@@ -85,7 +81,7 @@ export default function WebcamScanner({
         } else if (err.response?.status === 409) {
           setErrorMessage(err.response.data?.message || "Stok tidak mencukupi.");
         } else {
-          setErrorMessage("Gagal menghubungi server. Coba lagi.");
+          setErrorMessage("Gagal menghubungi server backend.");
           console.error("Scan request failed:", err);
         }
       } finally {
@@ -116,7 +112,7 @@ export default function WebcamScanner({
       const devices = await Html5Qrcode.getCameras();
 
       if (!devices || devices.length === 0) {
-        setErrorMessage("Kamera tidak ditemukan.");
+        setErrorMessage("Kamera webcam tidak terdeteksi.");
         return;
       }
 
@@ -166,7 +162,6 @@ export default function WebcamScanner({
     }
   }, []);
 
-  // Otomatis mulai scan saat komponen dimuat
   useEffect(() => {
     startScanner();
 
@@ -177,7 +172,7 @@ export default function WebcamScanner({
   }, [startScanner, stopScanner]);
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl bg-canvas p-4 shadow-card border border-brand-100">
+    <div className="flex flex-col gap-3 rounded-xl bg-white p-4 shadow-card border border-brand-100">
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">
           <ScanLine className="h-4 w-4 text-brand" />
@@ -238,7 +233,7 @@ export default function WebcamScanner({
 
       {lastScanned && !errorMessage && (
         <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs text-emerald-800 flex items-center justify-between">
-          <span>Terdeteksi di MySQL: <strong className="font-semibold">{lastScanned.name}</strong></span>
+          <span>Terdeteksi: <strong className="font-semibold">{lastScanned.brand} — {lastScanned.variant_name}</strong></span>
           <span className="font-bold text-emerald-600">Rp {Number(lastScanned.price).toLocaleString('id-ID')}</span>
         </div>
       )}

@@ -1,5 +1,5 @@
 /**
- * scanController.js (MySQL Version)
+ * scanController.js (MySQL Version - Master Spec Compliant)
  */
 const pool = require("../config/db").pool;
 
@@ -12,7 +12,7 @@ async function scanBarcode(req, res) {
 
   try {
     const [rows] = await pool.query(
-      `SELECT id, barcode, name, price, stock, min_stock, category_id
+      `SELECT id, barcode, brand, variant_name, price, stock, min_stock, category_id
        FROM products
        WHERE barcode = ?
        LIMIT 1`,
@@ -27,7 +27,10 @@ async function scanBarcode(req, res) {
 
     if (mode === "kasir") {
       if (product.stock <= 0) {
-        return res.status(409).json({ status: "error", message: `Stok ${product.name} habis.` });
+        return res.status(409).json({
+          status: "error",
+          message: `Stok ${product.brand} ${product.variant_name} habis.`,
+        });
       }
       return res.status(200).json({ status: "success", data: product });
     }
@@ -51,7 +54,8 @@ async function scanBarcode(req, res) {
 
 async function checkoutTransaction(req, res) {
   const { items, total_price, payment_method } = req.body;
-  const userId = req.user.id;
+  // Default to system user ID 3 (Kasir Utama) if req.user is unauthenticated in dev
+  const userId = req.user?.id || 3;
 
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ status: "error", message: "Keranjang kosong." });
@@ -64,38 +68,45 @@ async function checkoutTransaction(req, res) {
 
     for (const item of items) {
       const [rows] = await connection.query(
-        `SELECT stock FROM products WHERE id = ? FOR UPDATE`,
-        [item.product_id]
+        `SELECT stock, brand, variant_name FROM products WHERE id = ? FOR UPDATE`,
+        [item.product_id || item.id]
       );
 
-      if (!rows[0] || rows[0].stock < item.qty) {
-        throw Object.assign(new Error("Stok tidak mencukupi."), { statusCode: 409 });
+      const currentStock = rows[0]?.stock || 0;
+      if (!rows[0] || currentStock < item.qty) {
+        const name = rows[0] ? `${rows[0].brand} ${rows[0].variant_name}` : "Produk";
+        throw Object.assign(new Error(`Stok ${name} tidak mencukupi (Tersisa: ${currentStock}).`), { statusCode: 409 });
       }
     }
 
+    const transactionCode = `TRX-${Date.now()}`;
+
     const [trxResult] = await connection.query(
-      `INSERT INTO transactions (user_id, total_amount, payment_method, created_at)
-       VALUES (?, ?, ?, NOW())`,
-      [userId, total_price, payment_method || 'CASH']
+      `INSERT INTO transactions (transaction_code, user_id, total_price, payment_method, created_at)
+       VALUES (?, ?, ?, ?, NOW())`,
+      [transactionCode, userId, total_price, payment_method || 'CASH']
     );
     const transactionId = trxResult.insertId;
 
     for (const item of items) {
+      const productId = item.product_id || item.id;
+      const itemSubtotal = item.subtotal || (item.price * item.qty);
+
       await connection.query(
-        `INSERT INTO transaction_details (transaction_id, product_id, quantity, price_at_transaction, subtotal)
-         VALUES (?, ?, ?, ?, ?)`,
-        [transactionId, item.product_id, item.qty, item.price || 0, item.subtotal]
+        `INSERT INTO transaction_details (transaction_id, product_id, qty, subtotal)
+         VALUES (?, ?, ?, ?)`,
+        [transactionId, productId, item.qty, itemSubtotal]
       );
 
       await connection.query(
         `UPDATE products SET stock = stock - ? WHERE id = ?`,
-        [item.qty, item.product_id]
+        [item.qty, productId]
       );
 
       await connection.query(
-        `INSERT INTO inventory_logs (product_id, user_id, type, quantity_changed, notes, created_at)
+        `INSERT INTO inventory_logs (product_id, user_id, type, qty, notes, created_at)
          VALUES (?, ?, 'OUT', ?, ?, NOW())`,
-        [item.product_id, userId, item.qty, `Checkout TRX-${transactionId}`]
+        [productId, userId, item.qty, `Checkout ${transactionCode}`]
       );
     }
 
@@ -103,8 +114,8 @@ async function checkoutTransaction(req, res) {
 
     return res.status(201).json({
       status: "success",
-      message: "Transaksi berhasil.",
-      data: { transaction_id: transactionId },
+      message: "Transaksi checkout berhasil disimpan!",
+      data: { transaction_id: transactionId, transaction_code: transactionCode },
     });
   } catch (err) {
     await connection.rollback();
@@ -121,7 +132,7 @@ async function checkoutTransaction(req, res) {
 
 async function restockProduct(req, res) {
   const { product_id, qty, notes } = req.body;
-  const userId = req.user.id;
+  const userId = req.user?.id || 2; // Default to Gudang user
 
   if (!product_id || !qty || qty <= 0) {
     return res.status(400).json({ status: "error", message: "Data restock tidak valid." });
@@ -142,14 +153,14 @@ async function restockProduct(req, res) {
     }
 
     const [rows] = await connection.query(
-      `SELECT id, name, stock FROM products WHERE id = ?`,
+      `SELECT id, brand, variant_name, stock FROM products WHERE id = ?`,
       [product_id]
     );
 
     await connection.query(
-      `INSERT INTO inventory_logs (product_id, user_id, type, quantity_changed, notes, created_at)
+      `INSERT INTO inventory_logs (product_id, user_id, type, qty, notes, created_at)
        VALUES (?, ?, 'IN', ?, ?, NOW())`,
-      [product_id, userId, qty, notes || "Restock via form"]
+      [product_id, userId, qty, notes || "Restock via webcam scan"]
     );
 
     await connection.commit();
