@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
-import { Camera, CameraOff, ScanLine, AlertTriangle, Loader2 } from "lucide-react";
+import { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } from "@zxing/library";
+import { Camera, CameraOff, ScanLine, AlertTriangle, Loader2, Keyboard, ArrowRight, Zap } from "lucide-react";
 import axios from "axios";
 import { useCartStore } from "../store/useCartStore";
 
-const SCAN_COOLDOWN_MS = 1800; // 1.5 - 2s debounce window
-const SCANNER_ELEMENT_ID = "webcam-scanner-viewport";
+const SCAN_COOLDOWN_MS = 1500;
 
 function playBeep() {
   try {
@@ -15,7 +14,7 @@ function playBeep() {
     const gain = ctx.createGain();
 
     oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(1046.5, ctx.currentTime); // C6
+    oscillator.frequency.setValueAtTime(1046.5, ctx.currentTime);
     gain.gain.setValueAtTime(0.15, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
 
@@ -36,7 +35,8 @@ export default function WebcamScanner({
   onNotFound,
   apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000",
 }) {
-  const scannerRef = useRef(null);
+  const videoRef = useRef(null);
+  const codeReaderRef = useRef(null);
   const isScanningRef = useRef(false);
   const cooldownTimerRef = useRef(null);
 
@@ -44,11 +44,15 @@ export default function WebcamScanner({
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastScanned, setLastScanned] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [manualBarcode, setManualBarcode] = useState("");
 
   const addItemToCart = useCartStore((state) => state.addItem);
 
   const handleDetectedBarcode = useCallback(
     async (decodedText) => {
+      const cleanBarcode = String(decodedText).trim();
+      if (!cleanBarcode) return;
+
       const token = localStorage.getItem("auth_token");
 
       setIsProcessing(true);
@@ -57,7 +61,7 @@ export default function WebcamScanner({
       try {
         const response = await axios.post(
           `${apiBaseUrl}/api/scan`,
-          { barcode: decodedText, mode },
+          { barcode: cleanBarcode, mode },
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -76,12 +80,12 @@ export default function WebcamScanner({
         setLastScanned(product);
       } catch (err) {
         if (err.response?.status === 404) {
-          setErrorMessage(`Barang dengan barcode (${decodedText}) tidak terdaftar!`);
-          onNotFound?.(decodedText);
+          setErrorMessage(`Barang (${cleanBarcode}) tidak terdaftar di MySQL!`);
+          onNotFound?.(cleanBarcode);
         } else if (err.response?.status === 409) {
           setErrorMessage(err.response.data?.message || "Stok tidak mencukupi.");
         } else {
-          setErrorMessage("Gagal menghubungi server backend.");
+          setErrorMessage("Gagal menghubungi server backend (port 3000).");
           console.error("Scan request failed:", err);
         }
       } finally {
@@ -91,76 +95,66 @@ export default function WebcamScanner({
     [apiBaseUrl, mode, addItemToCart, onProductDetected, onNotFound]
   );
 
-  const onScanSuccess = useCallback(
-    (decodedText) => {
-      if (isScanningRef.current) return;
-
-      isScanningRef.current = true;
-      playBeep();
-      handleDetectedBarcode(decodedText);
-
-      cooldownTimerRef.current = setTimeout(() => {
-        isScanningRef.current = false;
-      }, SCAN_COOLDOWN_MS);
-    },
-    [handleDetectedBarcode]
-  );
-
   const startScanner = useCallback(async () => {
     setErrorMessage(null);
+
+    if (codeReaderRef.current) {
+      try {
+        codeReaderRef.current.reset();
+      } catch (e) {}
+    }
+
     try {
-      const devices = await Html5Qrcode.getCameras();
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.EAN_13,
+        BarcodeFormat.EAN_8,
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.UPC_A,
+        BarcodeFormat.UPC_E,
+        BarcodeFormat.QR_CODE,
+      ]);
+      hints.set(DecodeHintType.TRY_HARDER, true);
 
-      if (!devices || devices.length === 0) {
-        setErrorMessage("Kamera webcam tidak terdeteksi.");
-        return;
-      }
+      const reader = new BrowserMultiFormatReader(hints, 300);
+      codeReaderRef.current = reader;
 
-      const cameraId = devices[0].id;
-      const html5QrCode = new Html5Qrcode(SCANNER_ELEMENT_ID, {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8,
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.UPC_A,
-        ],
-        verbose: false,
+      await reader.decodeFromVideoDevice(undefined, videoRef.current, (result, err) => {
+        if (result && !isScanningRef.current) {
+          isScanningRef.current = true;
+          playBeep();
+          const decodedText = result.getText();
+          handleDetectedBarcode(decodedText);
+
+          cooldownTimerRef.current = setTimeout(() => {
+            isScanningRef.current = false;
+          }, SCAN_COOLDOWN_MS);
+        }
       });
-
-      scannerRef.current = html5QrCode;
-
-      await html5QrCode.start(
-        cameraId,
-        {
-          fps: 10,
-          qrbox: { width: 260, height: 160 },
-          aspectRatio: 1.7777778,
-        },
-        onScanSuccess,
-        () => {}
-      );
 
       setIsCameraActive(true);
     } catch (err) {
-      console.error("Failed to start scanner:", err);
-      setErrorMessage("Akses kamera ditolak atau tidak tersedia.");
+      console.error("ZXing Camera Error:", err);
+      setErrorMessage("Gagal mengakses webcam atau kamera dikunci program lain.");
       setIsCameraActive(false);
     }
-  }, [onScanSuccess]);
+  }, [handleDetectedBarcode]);
 
-  const stopScanner = useCallback(async () => {
-    try {
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        await scannerRef.current.stop();
-        await scannerRef.current.clear();
-      }
-    } catch (err) {
-      console.warn("Error stopping scanner:", err);
-    } finally {
-      setIsCameraActive(false);
+  const stopScanner = useCallback(() => {
+    if (codeReaderRef.current) {
+      codeReaderRef.current.reset();
+      codeReaderRef.current = null;
     }
+    setIsCameraActive(false);
   }, []);
+
+  const handleManualSubmit = (e) => {
+    e.preventDefault();
+    if (!manualBarcode.trim()) return;
+    playBeep();
+    handleDetectedBarcode(manualBarcode.trim());
+    setManualBarcode("");
+  };
 
   useEffect(() => {
     startScanner();
@@ -176,7 +170,7 @@ export default function WebcamScanner({
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">
           <ScanLine className="h-4 w-4 text-brand" />
-          {mode === "kasir" ? "Mode Kasir — Fast Scan" : "Mode Restock — Check-In Barang"}
+          {mode === "kasir" ? "Mode Kasir — ZXing Barcode Engine" : "Mode Restock — Check-In Barang"}
         </h2>
 
         <button
@@ -199,29 +193,59 @@ export default function WebcamScanner({
         </button>
       </div>
 
-      {/* Viewport kamera */}
+      {/* Viewport Kamera Direct Video Element */}
       <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-ink">
-        <div id={SCANNER_ELEMENT_ID} className="h-full w-full [&_video]:h-full [&_video]:w-full [&_video]:object-cover" />
+        <video
+          ref={videoRef}
+          className="h-full w-full object-cover"
+          autoPlay
+          muted
+          playsInline
+        />
 
         {!isCameraActive && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/60">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/60 p-4 text-center">
             <Camera className="h-8 w-8" />
             <p className="text-xs">Kamera belum aktif. Klik tombol di kanan atas.</p>
           </div>
         )}
 
         {isCameraActive && (
-          <div className="pointer-events-none absolute inset-8 rounded-lg border-2 border-brand shadow-scanner">
+          <div className="pointer-events-none absolute inset-4 rounded-lg border-2 border-brand shadow-scanner">
             <div className="absolute left-0 right-0 top-0 h-0.5 bg-brand animate-scan-line" />
+            <div className="absolute top-2 right-2 flex items-center gap-1 bg-brand/80 backdrop-blur-sm text-white px-2 py-0.5 rounded text-[10px] font-bold">
+              <Zap className="h-3 w-3 text-amber-300" /> ZXing EAN-13 TryHarder Engine
+            </div>
           </div>
         )}
 
         {isProcessing && (
-          <div className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white">
-            <Loader2 className="h-3 w-3 animate-spin" /> Memeriksa ke MySQL...
+          <div className="absolute right-3 bottom-3 flex items-center gap-1.5 rounded-full bg-black/75 px-3 py-1 text-xs text-white z-10">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-300" /> Memeriksa ke MySQL...
           </div>
         )}
       </div>
+
+      {/* Manual Input Form */}
+      <form onSubmit={handleManualSubmit} className="flex gap-2 items-center pt-1">
+        <div className="relative flex-1">
+          <Keyboard className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          <input
+            type="text"
+            value={manualBarcode}
+            onChange={(e) => setManualBarcode(e.target.value)}
+            placeholder="Input / Temblok Barcode Manual (misal: 8992753033744)"
+            className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand font-mono"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={!manualBarcode.trim()}
+          className="px-3.5 py-2 bg-brand text-white rounded-lg text-xs font-semibold hover:bg-brand-hover active:bg-brand-active disabled:opacity-40 transition-all flex items-center gap-1 shrink-0"
+        >
+          Scan <ArrowRight className="h-3 w-3" />
+        </button>
+      </form>
 
       {/* Feedback area */}
       {errorMessage && (
